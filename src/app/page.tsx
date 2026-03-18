@@ -1,65 +1,244 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  CardFooter,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  sendToN8n,
+  getRecentArticles,
+  getNewArticlesVsYesterday,
+  type AppError,
+} from "./actions";
+import type { Article } from "@/lib/supabase";
+
+type NewsItem = { title: string; url: string; content: string };
+type ViewMode = "all" | "new-only";
+
+function parseAppError(e: unknown): AppError {
+  if (e instanceof Error) {
+    try {
+      return JSON.parse(e.message) as AppError;
+    } catch {
+      return { code: "UNKNOWN_ERROR", userMessage: e.message };
+    }
+  }
+  return { code: "UNKNOWN_ERROR", userMessage: "検索に失敗しました" };
+}
+
+const ERROR_ICONS: Record<string, string> = {
+  NETWORK_ERROR: "📡",
+  TIMEOUT: "⏱",
+  AUTH_ERROR: "🔑",
+  RATE_LIMIT: "🚦",
+  SERVER_ERROR: "🔧",
+  UNKNOWN_ERROR: "⚠️",
+};
 
 export default function Home() {
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<NewsItem[]>([]);
+  const [newOnly, setNewOnly] = useState<Article[]>([]);
+  const [viewMode, setViewMode] = useState<ViewMode>("all");
+  const [history, setHistory] = useState<Article[]>([]);
+  const [appError, setAppError] = useState<AppError | null>(null);
+
+  useEffect(() => {
+    getRecentArticles().then(setHistory).catch(() => {});
+  }, []);
+
+  async function handleSearch() {
+    if (!query.trim()) return;
+    setLoading(true);
+    setAppError(null);
+    setResults([]);
+    setNewOnly([]);
+    setViewMode("all");
+    try {
+      const data = await sendToN8n(query);
+      setResults(data.results ?? []);
+      const diff = await getNewArticlesVsYesterday(query);
+      setNewOnly(diff);
+      const updated = await getRecentArticles();
+      setHistory(updated);
+    } catch (e) {
+      setAppError(parseAppError(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const displayResults =
+    viewMode === "new-only"
+      ? newOnly
+      : results.map((r) => ({ ...r, id: "", query, searched_at: "" }));
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="flex min-h-screen flex-col items-center bg-white px-4 py-16">
+      {/* 検索フォーム */}
+      <Card className="w-full max-w-2xl shadow-lg">
+        <CardHeader>
+          <CardTitle className="text-2xl">AIニュース検索</CardTitle>
+          <CardDescription>
+            n8n + Tavily で検索 → Supabase に自動保存
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Input
+            placeholder="例: 生成AI、量子コンピュータ..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+          />
+          <div className="flex gap-2 flex-wrap">
+            {["最新AI", "スタートアップ", "テック規制"].map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600 cursor-pointer hover:bg-gray-200"
+                onClick={() => setQuery(tag)}
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        </CardContent>
+        <CardFooter className="flex justify-between">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setQuery("");
+              setResults([]);
+              setNewOnly([]);
+              setAppError(null);
+            }}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            クリア
+          </Button>
+          <Button onClick={handleSearch} disabled={loading}>
+            {loading ? "検索中..." : "検索する"}
+          </Button>
+        </CardFooter>
+      </Card>
+
+      {/* エラーバナー */}
+      {appError && (
+        <div className="mt-6 w-full max-w-2xl rounded-lg border border-red-200 bg-red-50 px-5 py-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="text-xl">{ERROR_ICONS[appError.code] ?? "⚠️"}</span>
+            <div>
+              <p className="text-sm font-medium text-red-800">{appError.userMessage}</p>
+              <p className="text-xs text-red-500 mt-0.5">コード: {appError.code}</p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" onClick={handleSearch} disabled={loading}>
+            再試行
+          </Button>
         </div>
-      </main>
+      )}
+
+      {/* 検索結果 */}
+      {results.length > 0 && (
+        <div className="mt-8 w-full max-w-2xl space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-500">
+              {viewMode === "new-only"
+                ? `昨日と比較して新着 ${newOnly.length} 件`
+                : `${results.length} 件の結果（via n8n + Tavily）`}
+            </p>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant={viewMode === "all" ? "default" : "outline"}
+                onClick={() => setViewMode("all")}
+              >
+                全件
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === "new-only" ? "default" : "outline"}
+                onClick={() => setViewMode("new-only")}
+                disabled={newOnly.length === 0}
+              >
+                🆕 昨日と比較
+                {newOnly.length > 0 && (
+                  <span className="ml-1 rounded-full bg-blue-500 text-white text-xs px-1.5">
+                    {newOnly.length}
+                  </span>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {displayResults.length === 0 && viewMode === "new-only" && (
+            <p className="text-sm text-gray-400 text-center py-4">
+              昨日と同じ記事のみです。新着はありません。
+            </p>
+          )}
+
+          {displayResults.map((item, i) => (
+            <ArticleCard key={item.url ?? i} item={item} />
+          ))}
+        </div>
+      )}
+
+      {/* 過去の検索履歴 */}
+      {history.length > 0 && (
+        <div className="mt-12 w-full max-w-2xl">
+          <h2 className="text-lg font-semibold text-gray-700 mb-4">過去の検索履歴</h2>
+          <div className="space-y-3">
+            {history.map((item) => (
+              <ArticleCard key={item.id} item={item} showMeta />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function ArticleCard({
+  item,
+  showMeta = false,
+}: {
+  item: Partial<Article> & { title: string; url: string; content: string };
+  showMeta?: boolean;
+}) {
+  return (
+    <Card className="hover:shadow-md transition-shadow">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base leading-snug">
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline text-blue-700"
+          >
+            {item.title}
+          </a>
+        </CardTitle>
+        <CardDescription className="text-xs truncate">{item.url}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-gray-700 leading-relaxed">
+          {item.content.slice(0, 200)}
+          {item.content.length > 200 ? "..." : ""}
+        </p>
+        {showMeta && item.searched_at && (
+          <p className="mt-2 text-xs text-gray-400">
+            キーワード: <span className="font-medium">{item.query}</span>
+            {"　"}
+            {new Date(item.searched_at).toLocaleString("ja-JP")}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
