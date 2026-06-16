@@ -1,36 +1,47 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# メモ & 日記 → 毎朝ブリーフィング
 
-## Getting Started
+[Next.js](https://nextjs.org) + Supabase の小さなアプリ。
+**メモ・日記を送るだけ**で、毎朝8時に自動でその日のブリーフィングが Notion に作られる。
+「おやすみ」コマンドを手で打たなくても、送ってある内容から同じ効果が出るようにするのが目的。
 
-First, run the development server:
+## 仕組み（2ステップ）
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+1. **入力（このアプリ）** — メモ／日記を入力 → Supabase `entries` テーブルに保存。
+   - 「1日の境界は朝5時」（America/Los_Angeles）で論理日を判定して保存（`src/lib/date.ts`）。
+2. **生成（毎朝8時の自動セッション）** — 溜まったメモ・日記を読み、恒久ルールに沿って
+   翌日（その日）の「📋 朝briefing」を Notion に作成＋材料ページを更新。
+   - 手順は `.claude/commands/morning-briefing.md` を参照。
+
+## セットアップ
+
+### 1. 環境変数 `.env.local`
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Supabase テーブル作成
+`supabase-setup.sql` を Supabase SQL Editor で実行。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. ローカル起動
+```bash
+npm install
+npm run dev
+# → http://localhost:3000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 4. 毎朝8時の自動生成（Part B）
+Claude Code on the web の定期トリガーを **毎朝8:00（America/Los_Angeles）** に設定し、
+`/morning-briefing` を実行させる。詳細・書き込み先ページIDは
+`.claude/commands/morning-briefing.md` に記載。
 
-## Learn More
+## 主なファイル
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| ファイル | 役割 |
+|---|---|
+| `src/app/page.tsx` | メモ／日記の入力UI・今日の記録一覧 |
+| `src/app/actions.ts` | 保存・取得の Server Actions |
+| `src/lib/date.ts` | 朝5時境界の論理日ヘルパー |
+| `src/lib/supabase.ts` | Supabase クライアント・型 |
+| `supabase-setup.sql` | `entries` テーブル定義 |
+| `.claude/commands/morning-briefing.md` | 毎朝8時の生成プレイブック |
