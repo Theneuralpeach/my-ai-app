@@ -1,18 +1,26 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  CardFooter,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
-  saveMemo,
-  saveDiary,
-  getEntriesForDate,
-  todayLogicalDate,
+  sendToN8n,
+  getRecentArticles,
+  getNewArticlesVsYesterday,
   type AppError,
 } from "./actions";
-import type { Entry, DiaryDetails } from "@/lib/supabase";
+import type { Article } from "@/lib/supabase";
 
-type Mode = "memo" | "diary";
+type NewsItem = { title: string; url: string; content: string };
+type ViewMode = "all" | "new-only";
 
 function parseAppError(e: unknown): AppError {
   if (e instanceof Error) {
@@ -22,293 +30,215 @@ function parseAppError(e: unknown): AppError {
       return { code: "UNKNOWN_ERROR", userMessage: e.message };
     }
   }
-  return { code: "UNKNOWN_ERROR", userMessage: "保存に失敗しました" };
+  return { code: "UNKNOWN_ERROR", userMessage: "検索に失敗しました" };
 }
 
-function timeJa(iso: string): string {
-  return new Date(iso).toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+const ERROR_ICONS: Record<string, string> = {
+  NETWORK_ERROR: "📡",
+  TIMEOUT: "⏱",
+  AUTH_ERROR: "🔑",
+  RATE_LIMIT: "🚦",
+  SERVER_ERROR: "🔧",
+  UNKNOWN_ERROR: "⚠️",
+};
 
 export default function Home() {
-  const [mode, setMode] = useState<Mode>("memo");
-  const [today, setToday] = useState<string>("");
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<NewsItem[]>([]);
+  const [newOnly, setNewOnly] = useState<Article[]>([]);
+  const [viewMode, setViewMode] = useState<ViewMode>("all");
+  const [history, setHistory] = useState<Article[]>([]);
   const [appError, setAppError] = useState<AppError | null>(null);
 
-  // メモ
-  const [memo, setMemo] = useState("");
-
-  // 日記
-  const [diary, setDiary] = useState<DiaryDetails>({});
-  const [diaryNote, setDiaryNote] = useState("");
-
-  const refresh = useCallback(async () => {
-    try {
-      const list = await getEntriesForDate();
-      setEntries(list);
-    } catch {
-      /* 一覧の失敗は致命的でないので握りつぶす */
-    }
+  useEffect(() => {
+    getRecentArticles().then(setHistory).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    todayLogicalDate().then(setToday).catch(() => {});
-    refresh();
-  }, [refresh]);
-
-  function flash(msg: string) {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2500);
-  }
-
-  async function submitMemo() {
-    if (!memo.trim() || saving) return;
-    setSaving(true);
+  async function handleSearch() {
+    if (!query.trim()) return;
+    setLoading(true);
     setAppError(null);
+    setResults([]);
+    setNewOnly([]);
+    setViewMode("all");
     try {
-      await saveMemo(memo);
-      setMemo("");
-      flash("メモを記録したよ ✅");
-      await refresh();
+      const data = await sendToN8n(query);
+      setResults(data.results ?? []);
+      const diff = await getNewArticlesVsYesterday(query);
+      setNewOnly(diff);
+      const updated = await getRecentArticles();
+      setHistory(updated);
     } catch (e) {
       setAppError(parseAppError(e));
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   }
 
-  async function submitDiary() {
-    if (saving) return;
-    setSaving(true);
-    setAppError(null);
-    try {
-      await saveDiary(diary, diaryNote);
-      setDiary({});
-      setDiaryNote("");
-      flash("日記を記録したよ ✅");
-      await refresh();
-    } catch (e) {
-      setAppError(parseAppError(e));
-    } finally {
-      setSaving(false);
-    }
-  }
+  const displayResults =
+    viewMode === "new-only"
+      ? newOnly
+      : results.map((r) => ({ ...r, id: "", query, searched_at: "" }));
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-xl flex-col gap-5 px-4 py-8">
-      {/* ヘッダー */}
-      <header className="space-y-1">
-        <h1 className="text-2xl font-bold text-gray-900">今日のメモ &amp; 日記</h1>
-        <p className="text-sm text-gray-500">
-          {today ? `${today} の記録` : "読み込み中…"}
-        </p>
-        <p className="rounded-md bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-700">
-          ここに送ったメモ・日記は、<b>毎朝8時</b>に自動でまとめられて、その日のブリーフィングになります。「おやすみ」を打たなくても大丈夫。
-        </p>
-      </header>
-
-      {/* モード切替 */}
-      <div className="grid grid-cols-2 gap-2">
-        <Button
-          variant={mode === "memo" ? "default" : "outline"}
-          onClick={() => setMode("memo")}
-        >
-          📝 メモ
-        </Button>
-        <Button
-          variant={mode === "diary" ? "default" : "outline"}
-          onClick={() => setMode("diary")}
-        >
-          📔 日記
-        </Button>
-      </div>
-
-      {/* 入力エリア */}
-      {mode === "memo" ? (
-        <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <label className="text-sm font-medium text-gray-700">
-            思いついたこと・タスク・連絡事項
-          </label>
-          <textarea
-            className="min-h-28 w-full resize-y rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
-            placeholder="例: タノシイは8月で終了で確定。STCロゴはマップに反映済み。"
-            value={memo}
-            onChange={(e) => setMemo(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submitMemo();
-            }}
+    <div className="flex min-h-screen flex-col items-center bg-white px-4 py-16">
+      {/* 検索フォーム */}
+      <Card className="w-full max-w-2xl shadow-lg">
+        <CardHeader>
+          <CardTitle className="text-2xl">AIニュース検索</CardTitle>
+          <CardDescription>
+            n8n + Tavily で検索 → Supabase に自動保存
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Input
+            placeholder="例: 生成AI、量子コンピュータ..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
           />
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-400">⌘/Ctrl + Enter で送信</span>
-            <Button onClick={submitMemo} disabled={saving || !memo.trim()}>
-              {saving ? "記録中…" : "記録する"}
-            </Button>
+          <div className="flex gap-2 flex-wrap">
+            {["最新AI", "スタートアップ", "テック規制"].map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600 cursor-pointer hover:bg-gray-200"
+                onClick={() => setQuery(tag)}
+              >
+                {tag}
+              </span>
+            ))}
           </div>
-        </div>
-      ) : (
-        <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <DiaryField
-            label="① 睡眠時間"
-            placeholder="例: 7時間 / よく眠れた"
-            value={diary.sleep ?? ""}
-            onChange={(v) => setDiary((d) => ({ ...d, sleep: v }))}
-          />
-          <DiaryField
-            label="② 食べたもの"
-            placeholder="例: 朝はスムージー、夜は外食"
-            value={diary.meals ?? ""}
-            onChange={(v) => setDiary((d) => ({ ...d, meals: v }))}
-          />
-          <DiaryField
-            label="③ 誰と何したか"
-            placeholder="例: Sway と Pauloとポケ"
-            value={diary.whoWhat ?? ""}
-            onChange={(v) => setDiary((d) => ({ ...d, whoWhat: v }))}
-          />
-          <DiaryField
-            label="④ 体調"
-            placeholder="例: 少しだるい / 元気"
-            value={diary.condition ?? ""}
-            onChange={(v) => setDiary((d) => ({ ...d, condition: v }))}
-          />
+        </CardContent>
+        <CardFooter className="flex justify-between">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setQuery("");
+              setResults([]);
+              setNewOnly([]);
+              setAppError(null);
+            }}
+          >
+            クリア
+          </Button>
+          <Button onClick={handleSearch} disabled={loading}>
+            {loading ? "検索中..." : "検索する"}
+          </Button>
+        </CardFooter>
+      </Card>
 
-          <div className="space-y-1">
-            <span className="text-sm font-medium text-gray-700">
-              ⑤ 薬（イソトレチノイン 20mg）
-            </span>
+      {/* エラーバナー */}
+      {appError && (
+        <div className="mt-6 w-full max-w-2xl rounded-lg border border-red-200 bg-red-50 px-5 py-4 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="text-xl">{ERROR_ICONS[appError.code] ?? "⚠️"}</span>
+            <div>
+              <p className="text-sm font-medium text-red-800">{appError.userMessage}</p>
+              <p className="text-xs text-red-500 mt-0.5">コード: {appError.code}</p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" onClick={handleSearch} disabled={loading}>
+            再試行
+          </Button>
+        </div>
+      )}
+
+      {/* 検索結果 */}
+      {results.length > 0 && (
+        <div className="mt-8 w-full max-w-2xl space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-500">
+              {viewMode === "new-only"
+                ? `昨日と比較して新着 ${newOnly.length} 件`
+                : `${results.length} 件の結果（via n8n + Tavily）`}
+            </p>
             <div className="flex gap-2">
-              {(["飲んだ", "忘れた"] as const).map((opt) => (
-                <Button
-                  key={opt}
-                  type="button"
-                  variant={diary.meds === opt ? "default" : "outline"}
-                  onClick={() =>
-                    setDiary((d) => ({ ...d, meds: d.meds === opt ? "" : opt }))
-                  }
-                >
-                  {opt === "飲んだ" ? "✅ 飲んだ" : "⚠️ 忘れた"}
-                </Button>
-              ))}
+              <Button
+                size="sm"
+                variant={viewMode === "all" ? "default" : "outline"}
+                onClick={() => setViewMode("all")}
+              >
+                全件
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === "new-only" ? "default" : "outline"}
+                onClick={() => setViewMode("new-only")}
+                disabled={newOnly.length === 0}
+              >
+                🆕 昨日と比較
+                {newOnly.length > 0 && (
+                  <span className="ml-1 rounded-full bg-blue-500 text-white text-xs px-1.5">
+                    {newOnly.length}
+                  </span>
+                )}
+              </Button>
             </div>
           </div>
 
-          <div className="space-y-1">
-            <span className="text-sm font-medium text-gray-700">自由メモ</span>
-            <textarea
-              className="min-h-20 w-full resize-y rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
-              placeholder="今日感じたこと、なんでも"
-              value={diaryNote}
-              onChange={(e) => setDiaryNote(e.target.value)}
-            />
-          </div>
+          {displayResults.length === 0 && viewMode === "new-only" && (
+            <p className="text-sm text-gray-400 text-center py-4">
+              昨日と同じ記事のみです。新着はありません。
+            </p>
+          )}
 
-          <div className="flex justify-end">
-            <Button onClick={submitDiary} disabled={saving}>
-              {saving ? "記録中…" : "日記を記録する"}
-            </Button>
-          </div>
+          {displayResults.map((item, i) => (
+            <ArticleCard key={item.url ?? i} item={item} />
+          ))}
         </div>
       )}
 
-      {/* トースト */}
-      {toast && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-800">
-          {toast}
-        </div>
-      )}
-
-      {/* エラー */}
-      {appError && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          {appError.userMessage}
-          <span className="ml-2 text-xs text-red-400">({appError.code})</span>
-        </div>
-      )}
-
-      {/* 今日の記録 */}
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-gray-700">
-          今日の記録（{entries.length}件）
-        </h2>
-        {entries.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-400">
-            まだ今日の記録はありません。上から送ってね。
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {entries.map((e) => (
-              <EntryCard key={e.id} entry={e} />
+      {/* 過去の検索履歴 */}
+      {history.length > 0 && (
+        <div className="mt-12 w-full max-w-2xl">
+          <h2 className="text-lg font-semibold text-gray-700 mb-4">過去の検索履歴</h2>
+          <div className="space-y-3">
+            {history.map((item) => (
+              <ArticleCard key={item.id} item={item} showMeta />
             ))}
-          </ul>
-        )}
-      </section>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function DiaryField({
-  label,
-  placeholder,
-  value,
-  onChange,
+function ArticleCard({
+  item,
+  showMeta = false,
 }: {
-  label: string;
-  placeholder: string;
-  value: string;
-  onChange: (v: string) => void;
+  item: Partial<Article> & { title: string; url: string; content: string };
+  showMeta?: boolean;
 }) {
   return (
-    <div className="space-y-1">
-      <label className="text-sm font-medium text-gray-700">{label}</label>
-      <Input
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </div>
-  );
-}
-
-function EntryCard({ entry }: { entry: Entry }) {
-  const d = entry.details;
-  return (
-    <li className="rounded-lg border border-gray-200 bg-white p-3 text-sm shadow-sm">
-      <div className="mb-1 flex items-center gap-2 text-xs text-gray-400">
-        <span
-          className={`rounded-full px-2 py-0.5 font-medium ${
-            entry.kind === "diary"
-              ? "bg-amber-100 text-amber-700"
-              : "bg-indigo-100 text-indigo-700"
-          }`}
-        >
-          {entry.kind === "diary" ? "📔 日記" : "📝 メモ"}
-        </span>
-        <span>{timeJa(entry.created_at)}</span>
-      </div>
-      {entry.body && <p className="whitespace-pre-wrap text-gray-800">{entry.body}</p>}
-      {d && (
-        <dl className="mt-1 space-y-0.5 text-gray-700">
-          {d.sleep && <Row k="睡眠" v={d.sleep} />}
-          {d.meals && <Row k="食事" v={d.meals} />}
-          {d.whoWhat && <Row k="誰と何" v={d.whoWhat} />}
-          {d.condition && <Row k="体調" v={d.condition} />}
-          {d.meds && <Row k="薬" v={d.meds} />}
-        </dl>
-      )}
-    </li>
-  );
-}
-
-function Row({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="flex gap-2">
-      <dt className="shrink-0 text-gray-400">{k}:</dt>
-      <dd className="text-gray-800">{v}</dd>
-    </div>
+    <Card className="hover:shadow-md transition-shadow">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base leading-snug">
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline text-blue-700"
+          >
+            {item.title}
+          </a>
+        </CardTitle>
+        <CardDescription className="text-xs truncate">{item.url}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-gray-700 leading-relaxed">
+          {item.content.slice(0, 200)}
+          {item.content.length > 200 ? "..." : ""}
+        </p>
+        {showMeta && item.searched_at && (
+          <p className="mt-2 text-xs text-gray-400">
+            キーワード: <span className="font-medium">{item.query}</span>
+            {"　"}
+            {new Date(item.searched_at).toLocaleString("ja-JP")}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
